@@ -93,7 +93,12 @@ def show_ai_agents_demo(sdk):
             quantity = st.number_input("Quantity", value=1.0, step=0.1)
 
         with col2:
-            settlement_asset = st.text_input("Settlement Asset", "USD")
+            settlement_asset = st.selectbox(
+                "💰 Settlement Asset (Payment Currency)",
+                ["USDC", "USD", "ETH", "BTC"],
+                index=0,
+                help="Currency used for payment settlement on Arc testnet"
+            )
             actor = st.text_input("Actor Address", "0xBuyer001")
             add_counterparty = st.checkbox("Add Matching Intent", value=True)
 

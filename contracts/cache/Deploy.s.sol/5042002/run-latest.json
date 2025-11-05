@@ -1,0 +1,13 @@
+{
+  "transactions": [
+    {
+      "rpc": "https://rpc.testnet.arc.network"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.network"
+    },
+    {
+      "rpc": "https://rpc.testnet.arc.network"
+    }
+  ]
+}

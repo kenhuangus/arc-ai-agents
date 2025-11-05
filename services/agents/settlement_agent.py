@@ -13,12 +13,14 @@ Capabilities:
 
 import logging
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import hashlib
+import os
 
 from .base_agent import BaseAgent, AgentContext, AgentResult
 from services.llm import ModelPreference
+from services.payment import X402PaymentService, MockX402PaymentService
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +50,38 @@ class SettlementAgent(BaseAgent):
             model_preference=ModelPreference.CLAUDE  # Claude for structured planning
         )
 
+        # Initialize payment service
+        self.payment_service = self._init_payment_service()
+
+    def _init_payment_service(self) -> Optional[X402PaymentService]:
+        """Initialize x402 payment service for settlement fees"""
+        try:
+            # Check if payment credentials are configured
+            if os.getenv("PAYMENT_PRIVATE_KEY") and os.getenv("PAYMENT_RPC_URL"):
+                logger.info("Initializing x402 payment service for settlement agent")
+                return X402PaymentService.from_env()
+            else:
+                logger.warning("Payment service not configured - using mock service")
+                return MockX402PaymentService()
+        except Exception as e:
+            logger.error(f"Failed to initialize payment service: {e}")
+            logger.warning("Using mock payment service as fallback")
+            return MockX402PaymentService()
+
     def get_system_prompt(self, context: AgentContext) -> str:
         """Get system prompt for settlement agent"""
         return """You are an expert settlement coordination agent for the Arc Coordination System.
 
-Your role is to plan and coordinate the execution of intent settlements.
+Your role is to plan and coordinate the execution of intent settlements WITH PAYMENT PROCESSING.
 
 SETTLEMENT WORKFLOW:
+
+0. PAYMENT PROCESSING (NEW - x402 Protocol)
+   - Request payment for settlement service (10 USDC standard fee on Arc testnet)
+   - Send HTTP 402 Payment Required to client
+   - Wait for client to sign and submit payment
+   - Verify payment transaction on-chain via ERC-20 Transfer event
+   - Only proceed to settlement AFTER payment confirmed
 
 1. PRE-SETTLEMENT VALIDATION
    - Verify all parties available
@@ -81,6 +108,7 @@ SETTLEMENT WORKFLOW:
    - Notify parties
 
 5. ERROR HANDLING
+   - Payment not received → Abort settlement
    - Transaction reverted → Retry with adjusted gas
    - Timeout → Cancel and refund
    - Partial execution → Complete or rollback
@@ -168,6 +196,31 @@ IMPORTANT: Always return valid JSON. Plan for failure modes."""
                     },
                     "required": ["actor", "required_amount"]
                 }
+            },
+            {
+                "name": "request_payment",
+                "description": "Request payment for settlement service using x402 protocol (10 USDC on Arc testnet)",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "amount_eth": {"type": "number", "description": "Payment amount (in USDC for Arc testnet, default 10 USDC)"},
+                        "service_id": {"type": "string", "description": "Settlement service ID"},
+                        "description": {"type": "string", "description": "Payment description"}
+                    },
+                    "required": ["amount_eth", "service_id", "description"]
+                }
+            },
+            {
+                "name": "verify_payment",
+                "description": "Verify payment transaction was received on-chain",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "tx_hash": {"type": "string", "description": "Transaction hash"},
+                        "payment_submission": {"type": "object", "description": "Payment submission data"}
+                    },
+                    "required": ["tx_hash", "payment_submission"]
+                }
             }
         ]
 
@@ -186,6 +239,12 @@ IMPORTANT: Always return valid JSON. Plan for failure modes."""
 
         elif tool_name == "verify_collateral":
             return self._verify_collateral(tool_input, context)
+
+        elif tool_name == "request_payment":
+            return self._request_payment(tool_input)
+
+        elif tool_name == "verify_payment":
+            return self._verify_payment(tool_input)
 
         raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -297,6 +356,92 @@ IMPORTANT: Always return valid JSON. Plan for failure modes."""
             "collateral_ratio": round((mock_balance / required_amount) * 100, 2) if required_amount > 0 else 0,
             "status": "sufficient" if has_sufficient else "insufficient"
         }
+
+    def _request_payment(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Request payment using x402 protocol
+
+        Creates a payment-required message (HTTP 402)
+        for the settlement service fee.
+        """
+        amount_eth = tool_input["amount_eth"]
+        service_id = tool_input["service_id"]
+        description = tool_input["description"]
+
+        try:
+            # Create payment request using x402 service
+            payment_request = self.payment_service.create_payment_request(
+                amount_eth=amount_eth,
+                service_id=service_id,
+                description=description,
+                metadata={
+                    "service": "arc_settlement",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+            # Log: actual currency will be logged by payment service (USDC for Arc testnet)
+            logger.info(f"Payment requested: {amount_eth} for service {service_id}")
+
+            return {
+                "success": True,
+                "payment_request": payment_request,
+                "status": "payment_required",
+                "amount_eth": amount_eth,
+                "service_id": service_id
+            }
+
+        except Exception as e:
+            logger.error(f"Error requesting payment: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "status": "payment_request_failed"
+            }
+
+    def _verify_payment(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Verify payment transaction was received on-chain
+
+        Confirms that the client's payment transaction
+        was successfully mined and funds were received.
+        """
+        tx_hash = tool_input["tx_hash"]
+        payment_submission = tool_input["payment_submission"]
+
+        try:
+            # Verify transaction using x402 service
+            payment_result = self.payment_service.verify_transaction_received(
+                tx_hash,
+                payment_submission
+            )
+
+            if payment_result.get("type") == "payment-completed":
+                logger.info(f"Payment verified: {tx_hash}")
+                return {
+                    "success": True,
+                    "payment_verified": True,
+                    "tx_hash": tx_hash,
+                    "block_number": payment_result["transaction"]["block_number"],
+                    "status": "payment_confirmed"
+                }
+            else:
+                logger.warning(f"Payment verification failed: {payment_result.get('error')}")
+                return {
+                    "success": False,
+                    "payment_verified": False,
+                    "error": payment_result.get("error", "Payment verification failed"),
+                    "status": "payment_failed"
+                }
+
+        except Exception as e:
+            logger.error(f"Error verifying payment: {e}")
+            return {
+                "success": False,
+                "payment_verified": False,
+                "error": str(e),
+                "status": "payment_verification_error"
+            }
 
     async def run(self, context: AgentContext) -> AgentResult:
         """
@@ -443,12 +588,22 @@ SMART CONTRACTS AVAILABLE:
 - AuctionEscrow: 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0
 - PaymentRouter: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
 
-Use available tools to:
-1. Prepare settlement transaction
-2. Estimate gas requirements
-3. Verify collateral availability
+PAYMENT SERVICE (x402 Protocol):
+- Standard settlement fee: 10 USDC (Arc testnet)
+- Payment required BEFORE settlement execution
+- ERC-20 token payments via Arc testnet blockchain
+- Payment verified via ERC-20 Transfer events
 
-Create a comprehensive settlement plan with all execution steps."""
+Use available tools to:
+0. Request payment using x402 protocol (request_payment tool)
+1. Prepare settlement transaction (prepare_settlement tool)
+2. Estimate gas requirements (estimate_gas tool)
+3. Verify collateral availability (verify_collateral tool)
+
+IMPORTANT: Payment must be collected and verified BEFORE executing settlement.
+Use the request_payment tool first, then proceed with settlement planning.
+
+Create a comprehensive settlement plan with all execution steps including payment."""
 
         return prompt
 

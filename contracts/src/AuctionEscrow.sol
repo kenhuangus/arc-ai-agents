@@ -8,6 +8,18 @@ import "./PaymentRouter.sol";
  * @title AuctionEscrow
  * @notice Handles atomic escrow for matched intents with auction-based settlement
  * @dev Supports bid/ask matching with pre-funded escrow and dispute resolution
+ *
+ * FUTURE: ERC-20 Token Support
+ * --------------------------
+ * Currently supports native ETH escrow only. Future updates will add:
+ * - ERC-20 token escrow (USDC, DAI, etc.)
+ * - Token address field in Match struct
+ * - IERC20 interface for token transfers
+ * - Multi-currency support per match
+ * - Token approval checks before funding
+ *
+ * Note: Settlement Agent fees (separate from escrow) already support USDC
+ * via the x402 payment service integration.
  */
 contract AuctionEscrow {
     /// @notice Reference to IntentRegistry contract

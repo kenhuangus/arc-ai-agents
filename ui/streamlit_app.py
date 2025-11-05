@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 # Import AI demo page (enhanced version with step-by-step visualization)
 from ui.ai_demo_enhanced import show_ai_agents_demo
+from ui.x402_payment_demo import show_x402_payment_demo
 
 load_dotenv("config/.env")
 
@@ -234,6 +235,38 @@ def format_timestamp(timestamp: int) -> str:
     """Format Unix timestamp"""
     return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
 
+def get_explorer_url(chain_id: int) -> str:
+    """Get block explorer base URL for chain ID"""
+    explorers = {
+        5042002: "https://testnet.arcscan.app",  # Arc Testnet
+        1: "https://etherscan.io",                # Ethereum Mainnet
+        137: "https://polygonscan.com",           # Polygon
+        42161: "https://arbiscan.io",             # Arbitrum
+        8453: "https://basescan.org",             # Base
+        31337: None,                              # Anvil (local)
+    }
+    return explorers.get(chain_id, "https://testnet.arcscan.app")  # Default to Arc testnet
+
+def get_tx_url(tx_hash: str, chain_id: int = None) -> str:
+    """Get block explorer URL for transaction"""
+    if chain_id is None:
+        chain_id = int(os.getenv("PAYMENT_CHAIN_ID", "5042002"))
+
+    base_url = get_explorer_url(chain_id)
+    if base_url is None:
+        return "#"  # No explorer for local chains
+    return f"{base_url}/tx/{tx_hash}"
+
+def get_address_url(address: str, chain_id: int = None) -> str:
+    """Get block explorer URL for address/contract"""
+    if chain_id is None:
+        chain_id = int(os.getenv("PAYMENT_CHAIN_ID", "5042002"))
+
+    base_url = get_explorer_url(chain_id)
+    if base_url is None:
+        return "#"  # No explorer for local chains
+    return f"{base_url}/address/{address}"
+
 def format_hash(hash_str: str) -> str:
     """Format hash"""
     return f"{hash_str[:16]}...{hash_str[-8:]}"
@@ -254,7 +287,10 @@ def main():
     # Sidebar
     with st.sidebar:
         st.markdown("### 👤 Connected Account")
-        st.code(format_address(sdk.account.address, 20))
+        # Make account address clickable with explorer link
+        chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+        account_link = get_address_url(sdk.account.address, chain_id)
+        st.markdown(f"[`{format_address(sdk.account.address, 20)}`]({account_link})")
 
         st.markdown("---")
         st.markdown("### 🧭 Navigation")
@@ -291,9 +327,30 @@ def main():
 
         st.markdown("---")
         st.markdown("### 🔗 Contract Addresses")
-        st.caption(f"Registry: {format_address(os.getenv('INTENT_REGISTRY_ADDRESS', 'N/A'), 12)}")
-        st.caption(f"Escrow: {format_address(os.getenv('AUCTION_ESCROW_ADDRESS', 'N/A'), 12)}")
-        st.caption(f"Router: {format_address(os.getenv('PAYMENT_ROUTER_ADDRESS', 'N/A'), 12)}")
+
+        # Get chain ID for explorer links
+        chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+
+        # Registry contract
+        registry_addr = os.getenv('INTENT_REGISTRY_ADDRESS', 'N/A')
+        if registry_addr != 'N/A':
+            st.markdown(f"Registry: [{format_address(registry_addr, 12)}]({get_address_url(registry_addr, chain_id)})")
+        else:
+            st.caption(f"Registry: {registry_addr}")
+
+        # Escrow contract
+        escrow_addr = os.getenv('AUCTION_ESCROW_ADDRESS', 'N/A')
+        if escrow_addr != 'N/A':
+            st.markdown(f"Escrow: [{format_address(escrow_addr, 12)}]({get_address_url(escrow_addr, chain_id)})")
+        else:
+            st.caption(f"Escrow: {escrow_addr}")
+
+        # Router contract
+        router_addr = os.getenv('PAYMENT_ROUTER_ADDRESS', 'N/A')
+        if router_addr != 'N/A':
+            st.markdown(f"Router: [{format_address(router_addr, 12)}]({get_address_url(router_addr, chain_id)})")
+        else:
+            st.caption(f"Router: {router_addr}")
 
     # Main content area
     if "Dashboard" in page:
@@ -418,17 +475,31 @@ def show_dashboard(sdk: ArcSDK):
             st.markdown("### 📝 Recent Intents")
             if intents:
                 recent_intents = sorted(intents, key=lambda x: x.get('timestamp', 0), reverse=True)[:5]
+                chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+
                 for intent in recent_intents:
                     status_class = "status-active" if intent.get('is_active') else "status-matched" if intent.get('is_matched') else ""
                     status_text = "Active" if intent.get('is_active') else "Matched" if intent.get('is_matched') else "Inactive"
 
+                    intent_id = intent.get('intent_id', 'Unknown')
+                    actor = intent.get('actor', 'N/A')
+
+                    # Intent ID is just an identifier, not a transaction - don't make it clickable
+                    intent_display = format_hash(intent_id)
+
+                    if actor != 'N/A':
+                        actor_link = get_address_url(actor, chain_id)
+                        actor_display = f'<a href="{actor_link}" target="_blank" style="color: #667eea;">{format_address(actor)}</a>'
+                    else:
+                        actor_display = format_address(actor)
+
                     st.markdown(f"""
                     <div class="info-card">
-                        <strong>{format_hash(intent.get('intent_id', 'Unknown'))}</strong>
+                        <strong>{intent_display}</strong>
                         <span class="status-badge {status_class}">{status_text}</span>
                         <br>
                         <small>Asset: {intent.get('settlement_asset', 'N/A')}</small> •
-                        <small>Actor: {format_address(intent.get('actor', 'N/A'))}</small>
+                        <small>Actor: {actor_display}</small>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -438,17 +509,35 @@ def show_dashboard(sdk: ArcSDK):
             st.markdown("### 🔄 Recent Matches")
             if matches:
                 recent_matches = sorted(matches, key=lambda x: x.get('created_at', 0), reverse=True)[:5]
+                chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+
                 for match in recent_matches:
                     status = match.get('status', 'unknown')
                     status_class = f"status-{status}"
 
+                    match_id = match.get('match_id', 'Unknown')
+                    bidder = match.get('bidder', 'N/A')
+
+                    # Create explorer links
+                    if match_id != 'Unknown':
+                        match_link = get_tx_url(match_id, chain_id)
+                        match_display = f'<a href="{match_link}" target="_blank" style="color: inherit; text-decoration: none;">{format_hash(match_id)} 🔗</a>'
+                    else:
+                        match_display = format_hash(match_id)
+
+                    if bidder != 'N/A':
+                        bidder_link = get_address_url(bidder, chain_id)
+                        bidder_display = f'<a href="{bidder_link}" target="_blank" style="color: #667eea;">{format_address(bidder)}</a>'
+                    else:
+                        bidder_display = format_address(bidder)
+
                     st.markdown(f"""
                     <div class="info-card">
-                        <strong>{format_hash(match.get('match_id', 'Unknown'))}</strong>
+                        <strong>{match_display}</strong>
                         <span class="status-badge {status_class}">{status.upper()}</span>
                         <br>
                         <small>Price: {match.get('match_price', 0)}</small> •
-                        <small>Bidder: {format_address(match.get('bidder', 'N/A'))}</small>
+                        <small>Bidder: {bidder_display}</small>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -495,10 +584,18 @@ def show_create_intent(sdk: ArcSDK):
             )
 
         with col2:
+            # Payment currency (what you're paying with)
             settlement_asset = st.selectbox(
-                "Settlement Asset",
-                ["USD", "ETH", "BTC", "USDC"],
-                help="Currency for settlement"
+                "💰 Payment Currency (Paying With)",
+                ["USDC", "USD", "ETH", "BTC"],
+                help="Currency you will use to pay for the asset"
+            )
+
+            # Asset to buy/receive
+            target_asset = st.selectbox(
+                "🎯 Asset to Buy/Receive",
+                ["BTC", "ETH", "USDC", "USD", "SOL", "AVAX", "MATIC", "Other"],
+                help="Asset you want to buy or receive in this intent"
             )
 
             valid_hours = st.number_input(
@@ -517,7 +614,7 @@ def show_create_intent(sdk: ArcSDK):
 
         description = st.text_area(
             "Description",
-            value=f"{'Buy' if intent_type == 'bid' else 'Sell'} {quantity} units at {price}",
+            value=f"{'Buy' if intent_type == 'bid' else 'Sell'} {quantity} {target_asset} at {price} {settlement_asset} per unit",
             help="Brief description of the intent"
         )
 
@@ -536,21 +633,42 @@ def show_create_intent(sdk: ArcSDK):
                         constraints={
                             "type": intent_type,
                             "price": price,
-                            "quantity": quantity
+                            "quantity": quantity,
+                            "target_asset": target_asset,
+                            "payment_currency": settlement_asset
                         }
                     ))
 
                     st.success("✅ Intent submitted successfully!")
                     st.balloons()
 
+                    # Get chain ID for explorer links
+                    chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+                    intent_id = result.get('intent_id', 'Unknown')
+                    tx_hash = result.get('tx_hash', 'Unknown')
+
+                    # Create explorer links
+                    # Intent ID is just an identifier, not a transaction - don't make it clickable
+                    if intent_id != 'Unknown':
+                        intent_display = f"{intent_id[:32]}..."
+                    else:
+                        intent_display = "Unknown"
+
+                    # Transaction hash IS the actual on-chain transaction - make it clickable
+                    if tx_hash != 'Unknown':
+                        tx_link = get_tx_url(tx_hash, chain_id)
+                        tx_display = f'<a href="{tx_link}" target="_blank" style="color: #667eea;">{tx_hash} 🔗</a>'
+                    else:
+                        tx_display = "Unknown"
+
                     st.markdown(f"""
                     <div class="success-box">
                         <h4>Intent Created</h4>
-                        <p><strong>Intent ID:</strong> <code>{result.get('intent_id', 'Unknown')[:32]}...</code></p>
-                        <p><strong>Transaction:</strong> <code>{result.get('tx_hash', 'Unknown')[:32]}...</code></p>
-                        <p><strong>Type:</strong> {intent_type.upper()}</p>
-                        <p><strong>Price:</strong> {price}</p>
-                        <p><strong>Quantity:</strong> {quantity}</p>
+                        <p><strong>Intent ID:</strong> <code>{intent_display}</code></p>
+                        <p><strong>Transaction:</strong> <code>{tx_display}</code></p>
+                        <p><strong>Type:</strong> {intent_type.upper()} - {target_asset} with {settlement_asset}</p>
+                        <p><strong>Price:</strong> {price} {settlement_asset} per {target_asset}</p>
+                        <p><strong>Quantity:</strong> {quantity} {target_asset}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -850,9 +968,12 @@ def show_payments(sdk: ArcSDK):
     """Show payments page"""
     st.markdown("## 💳 Payment Management")
 
-    tab1, tab2 = st.tabs(["Create Payment Intent", "Verify Payment"])
+    tab1, tab2, tab3 = st.tabs(["x402 Crypto Payments (Demo)", "Create Payment Intent", "Verify Payment"])
 
     with tab1:
+        show_x402_payment_demo()
+
+    with tab2:
         st.markdown("### Create Stripe Payment Intent")
         with st.form("payment_form"):
             col1, col2 = st.columns(2)
@@ -889,7 +1010,7 @@ def show_payments(sdk: ArcSDK):
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    with tab2:
+    with tab3:
         st.markdown("### Verify & Anchor Payment")
         payment_intent_id = st.text_input("Payment Intent ID")
 
@@ -983,23 +1104,38 @@ Chain ID: 31337 (Anvil Local)
         """)
 
         st.markdown("### 📝 Contract Addresses")
-        st.code(f"""
-IntentRegistry:
-{os.getenv('INTENT_REGISTRY_ADDRESS', 'Not deployed')}
 
-AuctionEscrow:
-{os.getenv('AUCTION_ESCROW_ADDRESS', 'Not deployed')}
+        # Get chain ID for explorer links
+        chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
 
-PaymentRouter:
-{os.getenv('PAYMENT_ROUTER_ADDRESS', 'Not deployed')}
-        """)
+        # IntentRegistry
+        registry_addr = os.getenv('INTENT_REGISTRY_ADDRESS', 'Not deployed')
+        if registry_addr != 'Not deployed':
+            st.markdown(f"**IntentRegistry:**  \n[`{registry_addr}`]({get_address_url(registry_addr, chain_id)})")
+        else:
+            st.text("IntentRegistry: Not deployed")
+
+        # AuctionEscrow
+        escrow_addr = os.getenv('AUCTION_ESCROW_ADDRESS', 'Not deployed')
+        if escrow_addr != 'Not deployed':
+            st.markdown(f"**AuctionEscrow:**  \n[`{escrow_addr}`]({get_address_url(escrow_addr, chain_id)})")
+        else:
+            st.text("AuctionEscrow: Not deployed")
+
+        # PaymentRouter
+        router_addr = os.getenv('PAYMENT_ROUTER_ADDRESS', 'Not deployed')
+        if router_addr != 'Not deployed':
+            st.markdown(f"**PaymentRouter:**  \n[`{router_addr}`]({get_address_url(router_addr, chain_id)})")
+        else:
+            st.text("PaymentRouter: Not deployed")
 
     with col2:
         st.markdown("### 👤 Account Information")
-        st.code(f"""
-Address: {sdk.account.address}
-Balance: Check on blockchain
-        """)
+        # Make account address clickable with explorer link
+        chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
+        account_link = get_address_url(sdk.account.address, chain_id)
+        st.markdown(f"**Address:**  \n[`{sdk.account.address}`]({account_link})")
+        st.text("Balance: Check on blockchain")
 
         st.markdown("### 🏥 API Health")
         try:
