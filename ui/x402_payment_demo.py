@@ -398,69 +398,119 @@ def show_x402_payment_demo():
             st.markdown("### 5️⃣ Payer Broadcasts Transaction On-Chain")
 
             if st.session_state.tx_hash is None:
-                with st.spinner("Payer signing and broadcasting transaction..."):
-                    try:
-                        # Get transaction params
-                        tx_prepared = service.prepare_payment_transaction(
-                            st.session_state.payment_submission,
-                            max_gas_price_gwei=50
-                        )
+                # Step 5a: Send transaction (show immediately)
+                status_placeholder = st.empty()
+                status_placeholder.info("📤 Signing and broadcasting transaction...")
 
-                        # Payer signs and sends
-                        payer_account = Account.from_key(PAYER_PRIVATE_KEY)
-                        tx_params = tx_prepared['transaction']
-                        signed_tx = service.web3.eth.account.sign_transaction(tx_params, payer_account.key)
+                try:
+                    # Get current network gas price (not hardcoded!)
+                    current_gas_price = service.web3.eth.gas_price
 
-                        # Broadcast
-                        tx_hash = service.web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-                        tx_hash_hex = tx_hash.hex()
+                    # Get transaction params with network gas price
+                    tx_prepared = service.prepare_payment_transaction(
+                        st.session_state.payment_submission,
+                        max_gas_price_gwei=None  # Use network price
+                    )
 
-                        # Wait for confirmation
-                        receipt = service.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                    # Payer signs and sends
+                    payer_account = Account.from_key(PAYER_PRIVATE_KEY)
+                    tx_params = tx_prepared['transaction']
 
-                        st.session_state.tx_hash = tx_hash_hex
-                        st.session_state.receipt = receipt
-                    except Exception as e:
-                        st.error(f"Error sending transaction: {e}")
-                        return
+                    # Override with current gas price
+                    tx_params['gasPrice'] = current_gas_price
 
-            col1, col2 = st.columns([2, 1])
+                    signed_tx = service.web3.eth.account.sign_transaction(tx_params, payer_account.key)
 
-            with col1:
-                st.success("✅ Transaction mined on blockchain!")
+                    # Broadcast transaction
+                    tx_hash = service.web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+                    tx_hash_hex = tx_hash.hex()
 
-                tx_info = {
-                    "tx_hash": st.session_state.tx_hash,
-                    "block_number": st.session_state.receipt['blockNumber'],
-                    "gas_used": st.session_state.receipt['gasUsed'],
-                    "status": "Success" if st.session_state.receipt['status'] == 1 else "Failed"
-                }
-                st.json(tx_info)
+                    # Save transaction hash immediately
+                    st.session_state.tx_hash = tx_hash_hex
 
-            with col2:
-                st.info(f"""
-                **Blockchain Confirmation**
+                    # Get chain ID for explorer link
+                    chain_id = int(os.getenv('PAYMENT_CHAIN_ID', str(ANVIL_CHAIN_ID)))
+                    explorer_url = get_tx_url(tx_hash_hex, chain_id)
 
-                Block: **{st.session_state.receipt['blockNumber']}**
+                    # Show transaction sent status with clickable link
+                    status_placeholder.success(f"✅ Transaction broadcast! Hash: `{tx_hash_hex[:16]}...`")
 
-                Gas Used: **{st.session_state.receipt['gasUsed']}**
+                    if explorer_url != "#":
+                        st.info(f"🔗 **[Click here to view transaction on Arc Explorer]({explorer_url})**")
 
-                Status: **Success ✓**
-                """)
+                    # Now wait for confirmation with progress updates
+                    with st.spinner("⏳ Waiting for blockchain confirmation... (this may take 10-30 seconds)"):
+                        try:
+                            # Poll for receipt with longer timeout
+                            receipt = service.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+                            st.session_state.receipt = receipt
 
-                # Show block explorer link (Arc testnet or other network)
-                # Get chain ID from environment or use Anvil default
+                            if receipt['status'] == 1:
+                                st.success(f"✅ Transaction confirmed in block {receipt['blockNumber']}!")
+                            else:
+                                st.error("❌ Transaction failed on-chain")
+                                return
+
+                        except Exception as e:
+                            st.warning(f"⚠️ Transaction sent but confirmation timed out: {e}")
+                            st.info("The transaction is still processing. Check the explorer link above for status.")
+                            # Continue anyway - transaction might still succeed
+                            return
+
+                except Exception as e:
+                    st.error(f"❌ Error sending transaction: {e}")
+                    st.error(f"Details: {str(e)}")
+                    return
+
+            # Show transaction details (only if we have receipt)
+            if st.session_state.tx_hash and 'receipt' in st.session_state:
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    st.success("✅ Transaction mined on blockchain!")
+
+                    tx_info = {
+                        "tx_hash": st.session_state.tx_hash,
+                        "block_number": st.session_state.receipt['blockNumber'],
+                        "gas_used": st.session_state.receipt['gasUsed'],
+                        "status": "Success" if st.session_state.receipt['status'] == 1 else "Failed"
+                    }
+                    st.json(tx_info)
+
+                with col2:
+                    st.info(f"""
+                    **Blockchain Confirmation**
+
+                    Block: **{st.session_state.receipt['blockNumber']}**
+
+                    Gas Used: **{st.session_state.receipt['gasUsed']}**
+
+                    Status: **Success ✓**
+                    """)
+
+                    # Show block explorer link
+                    chain_id = int(os.getenv('PAYMENT_CHAIN_ID', str(ANVIL_CHAIN_ID)))
+                    explorer_url = get_tx_url(st.session_state.tx_hash, chain_id)
+
+                    if explorer_url != "#":
+                        st.markdown(f"### [🔍 View on Explorer ↗]({explorer_url})")
+                    else:
+                        st.caption("(Local Anvil - No block explorer)")
+
+                if st.session_state.payment_step == 5:
+                    if st.button("➡️ Verify Payment", type="primary"):
+                        st.session_state.payment_step = 6
+                        st.rerun()
+            elif st.session_state.tx_hash:
+                # Transaction sent but no receipt yet
                 chain_id = int(os.getenv('PAYMENT_CHAIN_ID', str(ANVIL_CHAIN_ID)))
                 explorer_url = get_tx_url(st.session_state.tx_hash, chain_id)
 
+                st.info("Transaction has been broadcast to the network.")
                 if explorer_url != "#":
-                    st.markdown(f"[🔍 View on Explorer ↗]({explorer_url})")
-                else:
-                    st.caption("(Local Anvil - No block explorer)")
+                    st.markdown(f"### [🔍 View Transaction Status on Explorer ↗]({explorer_url})")
 
-            if st.session_state.payment_step == 5:
-                if st.button("➡️ Verify Payment", type="primary"):
-                    st.session_state.payment_step = 6
+                if st.button("🔄 Check Status", type="primary"):
                     st.rerun()
 
         st.markdown("---")
