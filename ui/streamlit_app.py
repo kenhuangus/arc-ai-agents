@@ -200,17 +200,45 @@ st.markdown("""
 # HELPER FUNCTIONS
 # ============================================================================
 
+def get_env_var(key: str, default: str = "") -> str:
+    """Get environment variable from Streamlit secrets or os.environ"""
+    try:
+        # Try Streamlit secrets first (for cloud deployment)
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    # Fall back to environment variables (for local)
+    return os.getenv(key, default)
+
 @st.cache_resource
 def get_sdk():
     """Initialize and cache SDK instance"""
-    return ArcSDK(
-        api_base_url=os.getenv("API_BASE_URL", "http://localhost:8000"),
-        rpc_url=os.getenv("ARC_TESTNET_RPC_URL", "http://localhost:8545"),
-        private_key=os.getenv("PRIVATE_KEY"),
-        intent_registry_address=os.getenv("INTENT_REGISTRY_ADDRESS"),
-        auction_escrow_address=os.getenv("AUCTION_ESCROW_ADDRESS"),
-        payment_router_address=os.getenv("PAYMENT_ROUTER_ADDRESS")
-    )
+    try:
+        # Get configuration
+        api_base_url = get_env_var("API_BASE_URL", "http://localhost:8000")
+        rpc_url = get_env_var("ARC_TESTNET_RPC_URL", "http://localhost:8545")
+        private_key = get_env_var("PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+        intent_registry = get_env_var("INTENT_REGISTRY_ADDRESS", "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82")
+        auction_escrow = get_env_var("AUCTION_ESCROW_ADDRESS", "0x0B306BF915C4d645ff596e518fAf3F9669b97016")
+        payment_router = get_env_var("PAYMENT_ROUTER_ADDRESS", "0x9A676e781A523b5d0C0e43731313A708CB607508")
+
+        # Only initialize if we have required values
+        if not all([private_key, intent_registry, auction_escrow, payment_router]):
+            st.warning("⚠️ Running in demo mode - SDK not fully configured")
+            return None
+
+        return ArcSDK(
+            api_base_url=api_base_url,
+            rpc_url=rpc_url,
+            private_key=private_key,
+            intent_registry_address=intent_registry,
+            auction_escrow_address=auction_escrow,
+            payment_router_address=payment_router
+        )
+    except Exception as e:
+        st.warning(f"⚠️ SDK initialization failed: {str(e)[:100]}... Running in demo mode.")
+        return None
 
 def run_async(coro):
     """Run async coroutine"""
@@ -250,7 +278,7 @@ def get_explorer_url(chain_id: int) -> str:
 def get_tx_url(tx_hash: str, chain_id: int = None) -> str:
     """Get block explorer URL for transaction"""
     if chain_id is None:
-        chain_id = int(os.getenv("PAYMENT_CHAIN_ID", "5042002"))
+        chain_id = int(get_env_var("PAYMENT_CHAIN_ID", "5042002"))
 
     base_url = get_explorer_url(chain_id)
     if base_url is None:
@@ -260,7 +288,7 @@ def get_tx_url(tx_hash: str, chain_id: int = None) -> str:
 def get_address_url(address: str, chain_id: int = None) -> str:
     """Get block explorer URL for address/contract"""
     if chain_id is None:
-        chain_id = int(os.getenv("PAYMENT_CHAIN_ID", "5042002"))
+        chain_id = int(get_env_var("PAYMENT_CHAIN_ID", "5042002"))
 
     base_url = get_explorer_url(chain_id)
     if base_url is None:
@@ -288,9 +316,12 @@ def main():
     with st.sidebar:
         st.markdown("### 👤 Connected Account")
         # Make account address clickable with explorer link
-        chain_id = int(os.getenv('PAYMENT_CHAIN_ID', '5042002'))
-        account_link = get_address_url(sdk.account.address, chain_id)
-        st.markdown(f"[`{format_address(sdk.account.address, 20)}`]({account_link})")
+        if sdk and hasattr(sdk, 'account'):
+            chain_id = int(get_env_var('PAYMENT_CHAIN_ID', '5042002'))
+            account_link = get_address_url(sdk.account.address, chain_id)
+            st.markdown(f"[`{format_address(sdk.account.address, 20)}`]({account_link})")
+        else:
+            st.markdown("`Demo Mode - No Account Connected`")
 
         st.markdown("---")
         st.markdown("### 🧭 Navigation")
