@@ -327,7 +327,7 @@ def main():
         st.markdown("### 🧭 Navigation")
 
         page = st.radio(
-            "",
+            "Select Page",
             [
                 "📊 Dashboard",
                 "🤖 AI Agents Demo",
@@ -346,15 +346,22 @@ def main():
 
         # Quick stats
         st.markdown("### 📈 Quick Stats")
-        try:
-            intents = run_async(sdk.list_intents())
-            matches = run_async(sdk.list_matches())
+        if sdk:
+            try:
+                intents = run_async(sdk.list_intents())
+                matches = run_async(sdk.list_matches())
 
-            st.metric("Total Intents", len(intents))
-            st.metric("Total Matches", len(matches))
-            st.metric("Active Intents", len([i for i in intents if i.get('is_active')]))
-        except:
-            st.warning("Could not load stats")
+                st.metric("Total Intents", len(intents))
+                st.metric("Total Matches", len(matches))
+                st.metric("Active Intents", len([i for i in intents if i.get('is_active')]))
+            except Exception as e:
+                # API not accessible - show demo stats
+                st.metric("Total Intents", "8")
+                st.metric("Total Matches", "3")
+                st.metric("Active Intents", "5")
+                st.caption("📊 Demo data (API offline)")
+        else:
+            st.info("📊 Demo Mode")
 
         st.markdown("---")
         st.markdown("### 🔗 Contract Addresses")
@@ -416,6 +423,8 @@ def show_dashboard(sdk: ArcSDK):
 
     try:
         with st.spinner("Loading data..."):
+            if not sdk:
+                raise Exception("SDK not initialized")
             intents = run_async(sdk.list_intents())
             matches = run_async(sdk.list_matches())
 
@@ -575,9 +584,16 @@ def show_dashboard(sdk: ArcSDK):
                 st.info("No recent matches")
 
     except Exception as e:
-        st.error(f"Error loading dashboard: {str(e)}")
-        with st.expander("Error Details"):
-            st.code(str(e))
+        # Show demo data when API is not available
+        with col1:
+            st.markdown('<div class="metric-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"><div class="metric-label">Total Intents</div><div class="metric-value">8</div></div>', unsafe_allow_html=True)
+        with col2:
+            st.markdown('<div class="metric-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"><div class="metric-label">Active Intents</div><div class="metric-value">5</div></div>', unsafe_allow_html=True)
+        with col3:
+            st.markdown('<div class="metric-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"><div class="metric-label">Total Matches</div><div class="metric-value">3</div></div>', unsafe_allow_html=True)
+        with col4:
+            st.markdown('<div class="metric-card" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);"><div class="metric-label">Settled</div><div class="metric-value">2</div></div>', unsafe_allow_html=True)
+        st.info("📊 Showing demo data - Connect backend API for live stats")
 
 # ============================================================================
 # PAGE: CREATE INTENT
