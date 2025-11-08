@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["python312", "postgresql"]
+nixPkgs = ["python312"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python -m pip install --upgrade pip", "python -m pip install -r requirements.txt"]
 
 [start]
-cmd = "uvicorn services.api:app --host 0.0.0.0 --port $PORT"
+cmd = "python -m uvicorn services.api:app --host 0.0.0.0 --port $PORT"
